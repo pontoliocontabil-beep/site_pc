@@ -1,0 +1,109 @@
+rules_version = '2';
+
+// Regras de acesso do banco de conteúdo da PontoLio Contábil.
+// Somente as contas Google listadas em emailAutorizado() podem ler o rascunho, salvar e publicar.
+// O site público só consegue ler o documento já publicado.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Contas administrativas. Para incluir ou remover alguém, altere a lista e publique as regras de novo.
+    function emailAutorizado() {
+      return request.auth.token.email.lower() in [
+        'pontoliocontabil@gmail.com',
+        'franciscopinheirodasilva85@gmail.com'
+      ];
+    }
+
+    // Exige login com conta Google (nenhum outro tipo de login é aceito),
+    // com e-mail verificado pelo Google e presente na lista acima.
+    function ehAdmin() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'google.com'
+        && request.auth.token.email_verified == true
+        && emailAutorizado();
+    }
+
+    function emailDoUsuario() {
+      return request.auth.token.email.lower();
+    }
+
+    function soEstesCampos(campos) {
+      return request.resource.data.keys().hasOnly(campos)
+        && request.resource.data.keys().hasAll(campos);
+    }
+
+    function dadosValidos() {
+      return request.resource.data.dados is string
+        && request.resource.data.dados.size() > 2
+        && request.resource.data.dados.size() <= 800000;
+    }
+
+    // Cada gravação precisa avançar a versão em exatamente 1 (evita sobrescrever o trabalho de outra pessoa).
+    function proximaVersao() {
+      return request.resource.data.versao is int
+        && ((resource == null && request.resource.data.versao == 1)
+          || (resource != null && request.resource.data.versao == resource.data.versao + 1));
+    }
+
+    // Conteúdo publicado: qualquer visitante pode ler; só administradores publicam.
+    match /conteudo/publicado {
+      allow get: if true;
+      allow create, update: if ehAdmin()
+        && soEstesCampos(['dados', 'publicadoEm', 'versao'])
+        && dadosValidos()
+        && request.resource.data.publicadoEm == request.time
+        && proximaVersao();
+      allow delete: if false;
+    }
+
+    // Rascunho: só administradores leem e escrevem.
+    match /conteudo/rascunho {
+      allow get: if ehAdmin();
+      allow create, update: if ehAdmin()
+        && soEstesCampos(['dados', 'atualizadoEm', 'atualizadoPor', 'versao'])
+        && dadosValidos()
+        && request.resource.data.atualizadoEm == request.time
+        && request.resource.data.atualizadoPor == emailDoUsuario()
+        && proximaVersao();
+      allow delete: if false;
+    }
+
+    // Histórico de publicações: só inclusão (não pode ser alterado nem apagado pelo painel).
+    match /historico/{registro} {
+      allow get, list: if ehAdmin();
+      allow create: if ehAdmin()
+        && soEstesCampos(['dados', 'em', 'por', 'versaoPublicada'])
+        && dadosValidos()
+        && request.resource.data.em == request.time
+        && request.resource.data.por == emailDoUsuario()
+        && request.resource.data.versaoPublicada is int;
+      allow update, delete: if false;
+    }
+
+    // Imagens enviadas pelo painel (foto, logo, capas). Ficam no próprio Firestore, sem custo extra.
+    // Qualquer visitante pode ler uma imagem pelo identificador; só administradores enviam e apagam.
+    match /midia/{imagem} {
+      allow get: if true;
+      allow list: if ehAdmin();
+      allow create: if ehAdmin()
+        && soEstesCampos(['dados', 'tipo', 'largura', 'altura', 'nome', 'enviadoEm', 'enviadoPor'])
+        && request.resource.data.dados is string
+        && request.resource.data.dados.size() <= 900000
+        && request.resource.data.tipo in ['image/webp', 'image/png', 'image/jpeg']
+        && request.resource.data.dados.split(',').size() == 2
+        && request.resource.data.dados.split(',')[0] == 'data:' + request.resource.data.tipo + ';base64'
+        && request.resource.data.largura is int && request.resource.data.largura > 0 && request.resource.data.largura <= 4000
+        && request.resource.data.altura is int && request.resource.data.altura > 0 && request.resource.data.altura <= 4000
+        && request.resource.data.nome is string && request.resource.data.nome.size() <= 120
+        && request.resource.data.enviadoEm == request.time
+        && request.resource.data.enviadoPor == emailDoUsuario();
+      allow update: if false;
+      allow delete: if ehAdmin();
+    }
+
+    // Todo o resto é bloqueado.
+    match /{caminho=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "pontolio-site",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Site e painel administrativo da PontoLio Contábil",
+  "scripts": {
+    "build": "node build.mjs",
+    "testar:regras": "firebase emulators:exec --only firestore --project demo-pontolio \"node --test testes/\"",
+    "publicar": "npm run build && firebase deploy --only hosting,firestore:rules"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "6.0.0",
+    "esbuild": "0.28.2",
+    "firebase": "13.1.0",
+    "firebase-tools": "15.34.2"
+  }
+}
